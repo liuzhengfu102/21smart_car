@@ -319,7 +319,7 @@ private:
             image_median_x_ += OBSTACLE_STEERING_OFFSET;
             print_action_str_ = "识别到障碍(人或车)在右，正在向左规避";
         }
-        last_car_tick_ = getTickCount();
+        last_car_tick_ = cv::getTickCount();
         last_car_target_x_ = image_median_x_;
     }
 
@@ -340,8 +340,8 @@ private:
 
     void apply_persistence(bool current_has_car, bool current_has_coin) {
         if (!current_has_car) {
-            double elapsed = static_cast<double>(getTickCount() - last_car_tick_)
-                           / getTickFrequency();
+            double elapsed = static_cast<double>(cv::getTickCount() - last_car_tick_)
+                           / cv::getTickFrequency();
             if (elapsed < CAR_PERSIST_TIME) {
                 image_median_x_ = last_car_target_x_;
                 special_flag_ = 1;
