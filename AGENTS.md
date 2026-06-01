@@ -186,3 +186,4 @@ ssh root@192.168.3.57 "cd /home/orangepi/Desktop/smartcar/build && cmake .. && m
 - 当前 USB 设备未连接摄像头（lsusb 仅显示 root hub）——开发时需确认摄像头连接状态
 - **禁止在代码或提交中硬编码密码等敏感信息**——以上密码仅用于 SSH/SCP 运维操作
 - 本机通过 paramiko (Python) 可实现非交互式 SSH 操作，免密密钥已部署
+- **`cv::` 命名空间陷阱**：`getTickCount()` 和 `getTickFrequency()` 必须在 `cv::` 命名空间下调用。重构时如移除 `using namespace cv;`，需为这两个函数添加 `cv::` 前缀，否则板卡端 g++ 11.4.0 编译失败
