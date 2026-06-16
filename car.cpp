@@ -35,6 +35,7 @@ constexpr int SHM_SIZE = 4096;
 constexpr int SERIAL_BAUDRATE = B115200;
 constexpr const char* SHM_NAME = "/shm_road_coords";
 constexpr const char* SERIAL_DEVICE = "/dev/ttyS3";
+constexpr int HEADING_GAIN = 200;                // 【调参点】中线朝向补偿系数，越大入弯提前量越大
 constexpr int DEFAULT_SPEED = 1;
 constexpr uint8_t FRAME_HEADER_1 = 0xAA;
 constexpr uint8_t FRAME_HEADER_2 = 0x55;
@@ -381,12 +382,31 @@ private:
     string print_action_str_;
 
     void compute_road_center(const vector<RoadPoint>& road_points) {
-        if (road_points.empty()) return;
-        long long sum_x = 0;
-        for (size_t i = 0; i < road_points.size(); ++i) {
-            sum_x += road_points[i].x;
+        if (road_points.size() < 2) return;
+
+        long long sum_y = 0, sum_x = 0, sum_xy = 0, sum_yy = 0;
+        size_t n = road_points.size();
+        for (size_t i = 0; i < n; ++i) {
+            int y = road_points[i].y;
+            int x = road_points[i].x;
+            sum_y  += y;
+            sum_x  += x;
+            sum_xy += static_cast<long long>(y) * x;
+            sum_yy += static_cast<long long>(y) * y;
         }
-        base_road_x_ = static_cast<int>(sum_x / road_points.size());
+
+        double denom = static_cast<double>(n) * sum_yy
+                     - static_cast<double>(sum_y) * sum_y;
+        if (denom == 0.0) return;
+
+        double a = (static_cast<double>(n) * sum_xy
+                    - static_cast<double>(sum_y) * sum_x) / denom;
+        double b = (static_cast<double>(sum_x) - a * sum_y) / n;
+
+        int x_near = static_cast<int>(a * ROAD_Y_MAX + b);
+        int heading_correction = static_cast<int>(a * HEADING_GAIN);
+
+        base_road_x_ = x_near + heading_correction;
     }
 
     int select_best_object(const vector<DetectObj>& objects) {
