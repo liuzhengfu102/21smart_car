@@ -25,17 +25,21 @@ constexpr int OBSTACLE_AREA_THRESHOLD = 3000;     // 【调参点】障碍车面
 constexpr int COIN_AREA_THRESHOLD = 1000;         // 【调参点】金币面积阈值
 constexpr int OBSTACLE_STEERING_OFFSET = 160;     // 障碍物避障偏移量
 constexpr float COIN_SMOOTH_ALPHA = 0.15f;        // 【调参点】金币追踪平滑系数
-constexpr float OUTPUT_SMOOTH_ALPHA = 0.3f;       // 【调参点】最终输出平滑系数
+constexpr float OUTPUT_SMOOTH_ALPHA = 0.45f;      // 【调参点】最终输出平滑系数，越大响应越快
 constexpr float CAR_PERSIST_TIME = 0.5f;          // 障碍物消失后保持避障时间(秒)
 constexpr int ROAD_Y_MIN = 350;                   // 中线有效区间
 constexpr int ROAD_Y_MAX = 480;
+constexpr int ROAD_NEAR_Y = 470;                  // 近端预瞄位置，代表车前近处中线
+constexpr int ROAD_FAR_Y = 360;                   // 远端预瞄位置，代表弯道趋势
+constexpr float LOOKAHEAD_GAIN = 1.2f;            // 【调参点】弯道预瞄系数，越大入弯提前量越大
+constexpr int STEERING_MIN_X = 0;
+constexpr int STEERING_MAX_X = 640;
 constexpr int OBJ_Y_MIN = 200;                    // 目标有效区间
 constexpr int OBJ_Y_MAX = 480;
 constexpr int SHM_SIZE = 4096;
 constexpr int SERIAL_BAUDRATE = B115200;
 constexpr const char* SHM_NAME = "/shm_road_coords";
 constexpr const char* SERIAL_DEVICE = "/dev/ttyS3";
-constexpr int HEADING_GAIN = 200;                // 【调参点】中线朝向补偿系数，越大入弯提前量越大
 constexpr int DEFAULT_SPEED = 1;
 constexpr uint8_t FRAME_HEADER_1 = 0xAA;
 constexpr uint8_t FRAME_HEADER_2 = 0x55;
@@ -66,6 +70,10 @@ int object_center_x(const DetectObj& obj) {
 
 bool is_obstacle(const DetectObj& obj) {
     return obj.c == 1 || obj.c == 2;
+}
+
+int clamp_steering_x(int x) {
+    return std::max(STEERING_MIN_X, std::min(STEERING_MAX_X, x));
 }
 
 // ========================== SerialPort 类 =======================
@@ -403,10 +411,12 @@ private:
                     - static_cast<double>(sum_y) * sum_x) / denom;
         double b = (static_cast<double>(sum_x) - a * sum_y) / n;
 
-        int x_near = static_cast<int>(a * ROAD_Y_MAX + b);
-        int heading_correction = static_cast<int>(a * HEADING_GAIN);
+        double x_near = a * ROAD_NEAR_Y + b;
+        double x_far = a * ROAD_FAR_Y + b;
+        double lookahead_x = x_near + LOOKAHEAD_GAIN * (x_far - x_near);
 
-        base_road_x_ = x_near + heading_correction;
+        int raw_road_x = static_cast<int>(lookahead_x);
+        base_road_x_ = clamp_steering_x(raw_road_x);
     }
 
     int select_best_object(const vector<DetectObj>& objects) {
@@ -490,7 +500,8 @@ private:
     void smooth_output() {
         final_smoothed_x_ = OUTPUT_SMOOTH_ALPHA * image_median_x_
                           + (1.0f - OUTPUT_SMOOTH_ALPHA) * final_smoothed_x_;
-        image_median_x_ = static_cast<int>(final_smoothed_x_);
+        image_median_x_ = clamp_steering_x(static_cast<int>(final_smoothed_x_));
+        final_smoothed_x_ = static_cast<float>(image_median_x_);
     }
 };
 // ===============================================================

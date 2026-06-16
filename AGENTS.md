@@ -336,7 +336,7 @@ repeat obj_num times:
 
 以下描述对应当前 `car.cpp`，代码变化后必须同步更新：
 
-1. 道路中心：对有效道路点的 `x` 坐标取平均，结果保存为 `base_road_x`。
+1. 道路中心：对有效道路点拟合 `x = a*y + b`，用近端中线和远端趋势计算预瞄目标，结果限幅后保存为 `base_road_x`。
 2. 目标优先级：面积超过阈值的车或行人优先于金币。
 3. 同类选择：在通过面积筛选的候选中，优先选择包围框下边缘 `y` 最大的目标。
 4. 障碍规避：目标中心在图像左侧时转向基准减 `160`，在右侧时加 `160`。
@@ -354,13 +354,18 @@ repeat obj_num times:
 | `COIN_AREA_THRESHOLD` | 1000 | 金币面积阈值 |
 | `OBSTACLE_STEERING_OFFSET` | 160 | 避障转向偏移 |
 | `COIN_SMOOTH_ALPHA` | 0.15 | 金币追踪 EMA 系数 |
-| `OUTPUT_SMOOTH_ALPHA` | 0.3 | 最终输出 EMA 系数 |
+| `OUTPUT_SMOOTH_ALPHA` | 0.45 | 最终输出 EMA 系数 |
 | `CAR_PERSIST_TIME` | 0.5 秒 | 障碍状态保持时间 |
 | `ROAD_Y_MIN` / `ROAD_Y_MAX` | 350 / 480 | 道路点有效纵向区间 |
+| `ROAD_NEAR_Y` / `ROAD_FAR_Y` | 470 / 360 | 中线近端与远端预瞄纵向位置 |
+| `LOOKAHEAD_GAIN` | 1.2 | 弯道预瞄系数 |
+| `STEERING_MIN_X` / `STEERING_MAX_X` | 0 / 640 | 中线输出限幅范围 |
 | `SHM_SIZE` | 4096 | 共享内存大小 |
 | `DEFAULT_SPEED` | 1 | 默认速度 |
 
 调参时必须记录：修改前值、修改后值、测试场景、观察结果和是否回退。不得只提交“感觉更好”的参数变化。
+
+2026-06-16 本地方案调整：将旧的 `HEADING_GAIN=200` 线性回归朝向补偿替换为近端/远端预瞄，`LOOKAHEAD_GAIN=1.2`，`ROAD_NEAR_Y=470`，`ROAD_FAR_Y=360`；同时将 `OUTPUT_SMOOTH_ALPHA` 从 `0.3` 提高到 `0.45`。调整原因是已确认底层为“中线值大向右”，旧补偿在弯道中可能把目标推向相反方向。本次尚未进行板卡编译和实车验证，待板卡恢复后确认。
 
 ## 11. 构建、部署与运行
 
