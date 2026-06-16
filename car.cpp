@@ -10,7 +10,11 @@
 // ================== 共享内存需要的头文件 ==================
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <algorithm>
+#include <cerrno>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 #include <csignal>
 // ==========================================================
@@ -23,9 +27,9 @@ constexpr int OBSTACLE_STEERING_OFFSET = 160;     // 障碍物避障偏移量
 constexpr float COIN_SMOOTH_ALPHA = 0.15f;        // 【调参点】金币追踪平滑系数
 constexpr float OUTPUT_SMOOTH_ALPHA = 0.3f;       // 【调参点】最终输出平滑系数
 constexpr float CAR_PERSIST_TIME = 0.5f;          // 障碍物消失后保持避障时间(秒)
-constexpr int ROAD_Y_MIN = 350;
+constexpr int ROAD_Y_MIN = 350;                   // 中线有效区间
 constexpr int ROAD_Y_MAX = 480;
-constexpr int OBJ_Y_MIN = 200;
+constexpr int OBJ_Y_MIN = 200;                    // 目标有效区间
 constexpr int OBJ_Y_MAX = 480;
 constexpr int SHM_SIZE = 4096;
 constexpr int SERIAL_BAUDRATE = B115200;
@@ -51,6 +55,18 @@ struct DetectObj {
 };
 // ===============================================================
 
+int object_area(const DetectObj& obj) {
+    return std::abs(obj.x2 - obj.x1) * std::abs(obj.y2 - obj.y1);
+}
+
+int object_center_x(const DetectObj& obj) {
+    return (obj.x1 + obj.x2) / 2;
+}
+
+bool is_obstacle(const DetectObj& obj) {
+    return obj.c == 1 || obj.c == 2;
+}
+
 // ========================== SerialPort 类 =======================
 class SerialPort {
 public:
@@ -67,10 +83,18 @@ public:
             return false;
         }
         struct termios options;
-        tcgetattr(fd_, &options);
+        if (tcgetattr(fd_, &options) != 0) {
+            perror("tcgetattr error");
+            close();
+            return false;
+        }
 
-        cfsetispeed(&options, SERIAL_BAUDRATE);
-        cfsetospeed(&options, SERIAL_BAUDRATE);
+        if (cfsetispeed(&options, SERIAL_BAUDRATE) != 0
+            || cfsetospeed(&options, SERIAL_BAUDRATE) != 0) {
+            perror("cfset speed error");
+            close();
+            return false;
+        }
 
         options.c_cflag |= (CLOCAL | CREAD);
         options.c_cflag &= ~PARENB;
@@ -104,22 +128,37 @@ public:
 
     bool send_frame(uint8_t speed, int steering, int target) {
         if (fd_ == -1) return false;
-        uint8_t buffer[8];
-        buffer[0] = FRAME_HEADER_1;
-        buffer[1] = FRAME_HEADER_2;
-        buffer[2] = speed;
-        buffer[3] = static_cast<uint8_t>((steering >> 8) & 0xFF);
-        buffer[4] = static_cast<uint8_t>(steering & 0xFF);
-        buffer[5] = static_cast<uint8_t>((target >> 8) & 0xFF);
-        buffer[6] = static_cast<uint8_t>(target & 0xFF);
-        buffer[7] = FRAME_TAIL;
 
-        int n = write(fd_, buffer, sizeof(buffer));
-        if (n < 0) {
-            perror("\n串口发送失败");
+        uint8_t buffer[8] = {
+            FRAME_HEADER_1,
+            FRAME_HEADER_2,
+            speed,
+            static_cast<uint8_t>((steering >> 8) & 0xFF),
+            static_cast<uint8_t>(steering & 0xFF),
+            static_cast<uint8_t>((target >> 8) & 0xFF),
+            static_cast<uint8_t>(target & 0xFF),
+            FRAME_TAIL
+        };
+
+        size_t sent = 0;
+        while (sent < sizeof(buffer)) {
+            ssize_t n = write(fd_, buffer + sent, sizeof(buffer) - sent);
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                perror("\n串口发送失败");
+                return false;
+            }
+            if (n == 0) {
+                cerr << "\n串口发送失败：write 返回 0" << endl;
+                return false;
+            }
+            sent += static_cast<size_t>(n);
+        }
+
+        if (tcdrain(fd_) != 0) {
+            perror("\n串口刷新失败");
             return false;
         }
-        tcdrain(fd_);
         return true;
     }
 
@@ -132,63 +171,143 @@ private:
 };
 
 // ========================== 共享内存读取 ========================
+class SharedMemoryMapping {
+public:
+    SharedMemoryMapping() : fd_(-1), ptr_(MAP_FAILED), size_(0) {}
+
+    ~SharedMemoryMapping() {
+        close();
+    }
+
+    bool open_readonly(const char* name, size_t size) {
+        fd_ = shm_open(name, O_RDONLY, 0666);
+        if (fd_ < 0) {
+            return false;
+        }
+
+        ptr_ = mmap(0, size, PROT_READ, MAP_SHARED, fd_, 0);
+        if (ptr_ == MAP_FAILED) {
+            ::close(fd_);
+            fd_ = -1;
+            return false;
+        }
+
+        size_ = size;
+        return true;
+    }
+
+    const uint8_t* data() const {
+        return static_cast<const uint8_t*>(ptr_);
+    }
+
+    size_t size() const {
+        return size_;
+    }
+
+private:
+    void close() {
+        if (ptr_ != MAP_FAILED) {
+            munmap(ptr_, size_);
+            ptr_ = MAP_FAILED;
+        }
+        if (fd_ != -1) {
+            ::close(fd_);
+            fd_ = -1;
+        }
+    }
+
+    int fd_;
+    void* ptr_;
+    size_t size_;
+};
+
+class BufferReader {
+public:
+    BufferReader(const uint8_t* data, size_t size)
+        : data_(data), size_(size), offset_(0) {}
+
+    template <typename T>
+    bool read(T& value) {
+        if (remaining() < sizeof(T)) {
+            return false;
+        }
+        std::memcpy(&value, data_ + offset_, sizeof(T));
+        offset_ += sizeof(T);
+        return true;
+    }
+
+private:
+    size_t remaining() const {
+        return size_ - offset_;
+    }
+
+    const uint8_t* data_;
+    size_t size_;
+    size_t offset_;
+};
+
 bool read_shm_data(vector<RoadPoint>& road_points, vector<DetectObj>& objects) {
-    int shm_fd = shm_open(SHM_NAME, O_RDONLY, 0666);
-    if (shm_fd < 0) {
+    SharedMemoryMapping mapping;
+    if (!mapping.open_readonly(SHM_NAME, SHM_SIZE)) {
         return false;
     }
 
-    void* ptr = mmap(0, SHM_SIZE, PROT_READ, MAP_SHARED, shm_fd, 0);
-    if (ptr == MAP_FAILED) {
-        close(shm_fd);
-        return false;
-    }
+    BufferReader reader(mapping.data(), mapping.size());
 
-    uint8_t* data = static_cast<uint8_t*>(ptr);
-    int offset = 0;
-
-    uint32_t road_num = *reinterpret_cast<uint32_t*>(data + offset);
-    offset += 4;
     road_points.clear();
-    for (uint32_t i = 0; i < road_num && offset + 8 <= SHM_SIZE; ++i) {
-        float x = *reinterpret_cast<float*>(data + offset);
-        float y = *reinterpret_cast<float*>(data + offset + 4);
+    objects.clear();
+
+    uint32_t road_num = 0;
+    if (!reader.read(road_num)) {
+        return true;
+    }
+
+    for (uint32_t i = 0; i < road_num; ++i) {
+        float x = 0.0f;
+        float y = 0.0f;
+        if (!reader.read(x) || !reader.read(y)) {
+            return true;
+        }
+
         int int_x = static_cast<int>(x);
         int int_y = static_cast<int>(y);
         if (int_y >= ROAD_Y_MIN && int_y <= ROAD_Y_MAX) {
             road_points.push_back({int_x, int_y});
         }
-        offset += 8;
     }
 
-    objects.clear();
-    if (offset + 4 <= SHM_SIZE) {
-        uint32_t obj_num = *reinterpret_cast<uint32_t*>(data + offset);
-        offset += 4;
-        for (uint32_t i = 0; i < obj_num && offset + 20 <= SHM_SIZE; ++i) {
-            uint32_t c = *reinterpret_cast<uint32_t*>(data + offset);
-            float x1 = *reinterpret_cast<float*>(data + offset + 4);
-            float y1 = *reinterpret_cast<float*>(data + offset + 8);
-            float x2 = *reinterpret_cast<float*>(data + offset + 12);
-            float y2 = *reinterpret_cast<float*>(data + offset + 16);
+    uint32_t obj_num = 0;
+    if (!reader.read(obj_num)) {
+        return true;
+    }
 
-            int int_c = static_cast<int>(c);
-            int int_x1 = static_cast<int>(x1);
-            int int_y1 = static_cast<int>(y1);
-            int int_x2 = static_cast<int>(x2);
-            int int_y2 = static_cast<int>(y2);
+    for (uint32_t i = 0; i < obj_num; ++i) {
+        uint32_t c = 0;
+        float x1 = 0.0f;
+        float y1 = 0.0f;
+        float x2 = 0.0f;
+        float y2 = 0.0f;
 
-            int min_y = std::min(int_y1, int_y2);
-            int max_y = std::max(int_y1, int_y2);
-            if (max_y >= OBJ_Y_MAX && min_y <= OBJ_Y_MAX) {
-                objects.push_back({int_c, int_x1, int_y1, int_x2, int_y2});
-            }
-            offset += 20;
+        if (!reader.read(c) || !reader.read(x1) || !reader.read(y1)
+            || !reader.read(x2) || !reader.read(y2)) {
+            return true;
+        }
+
+        DetectObj obj{
+            static_cast<int>(c),
+            static_cast<int>(x1),
+            static_cast<int>(y1),
+            static_cast<int>(x2),
+            static_cast<int>(y2)
+        };
+
+        int min_y = std::min(obj.y1, obj.y2);
+        int max_y = std::max(obj.y1, obj.y2);
+        if (max_y >= OBJ_Y_MIN && min_y <= OBJ_Y_MAX) {
+            objects.push_back(obj);
         }
     }
 
-    munmap(ptr, SHM_SIZE);
-    close(shm_fd);
     return true;
 }
 // ===============================================================
@@ -275,29 +394,24 @@ private:
 
         bool has_priority_obstacle = false;
         for (size_t i = 0; i < objects.size(); ++i) {
-            if (objects[i].c == 1 || objects[i].c == 2) {
-                int area = std::abs(objects[i].x2 - objects[i].x1)
-                         * std::abs(objects[i].y2 - objects[i].y1);
-                if (area > OBSTACLE_AREA_THRESHOLD) {
-                    has_priority_obstacle = true;
-                    break;
-                }
+            if (is_obstacle(objects[i]) && object_area(objects[i]) > OBSTACLE_AREA_THRESHOLD) {
+                has_priority_obstacle = true;
+                break;
             }
         }
 
         int valid_idx = -1;
         int max_y_val = -1;
         for (size_t i = 0; i < objects.size(); ++i) {
-            int area = std::abs(objects[i].x2 - objects[i].x1)
-                     * std::abs(objects[i].y2 - objects[i].y1);
+            int area = object_area(objects[i]);
 
-            if (objects[i].c != 1 && objects[i].c != 2) {
-                if (area < COIN_AREA_THRESHOLD) continue;
-            } else {
+            if (is_obstacle(objects[i])) {
                 if (area <= OBSTACLE_AREA_THRESHOLD) continue;
+            } else {
+                if (area < COIN_AREA_THRESHOLD) continue;
             }
 
-            if (has_priority_obstacle && objects[i].c != 1 && objects[i].c != 2) {
+            if (has_priority_obstacle && !is_obstacle(objects[i])) {
                 continue;
             }
 
@@ -311,7 +425,7 @@ private:
     }
 
     void compute_obstacle_steering(const DetectObj& obj) {
-        int obj_center_x = (obj.x1 + obj.x2) / 2;
+        int obj_center_x = object_center_x(obj);
         if (obj_center_x < IMAGE_CENTER_X) {
             image_median_x_ -= OBSTACLE_STEERING_OFFSET;
             print_action_str_ = "识别到障碍(人或车)在左，正在向右规避";
@@ -324,7 +438,7 @@ private:
     }
 
     void compute_coin_steering(const DetectObj& obj) {
-        int obj_center_x = (obj.x1 + obj.x2) / 2;
+        int obj_center_x = object_center_x(obj);
         if (obj_center_x < IMAGE_CENTER_X) {
             print_action_str_ = "识别到金币在左，向左追踪获取";
         } else {
@@ -363,14 +477,18 @@ private:
 
 // ========================== 全局变量 / 信号处理 =================
 static SerialPort g_serial;
+static volatile sig_atomic_t g_stop_requested = 0;
 
 void handle_sigint(int /*sig*/) {
+    g_stop_requested = 1;
+}
+
+void stop_car_and_close_serial() {
     if (g_serial.is_open()) {
         g_serial.send_stop();
         g_serial.close();
         cout << "\n[程序终止] 已发送停车及状态清空指令并关闭串口。" << endl;
     }
-    exit(0);
 }
 // ===============================================================
 
@@ -384,10 +502,12 @@ int main() {
     }
 
     CarController controller;
+    vector<RoadPoint> road_points;
+    vector<DetectObj> objects;
 
-    while (true) {
-        vector<RoadPoint> road_points;
-        vector<DetectObj> objects;
+    while (!g_stop_requested) {
+        road_points.clear();
+        objects.clear();
 
         bool shm_ok = read_shm_data(road_points, objects);
 
@@ -416,5 +536,6 @@ int main() {
         }
     }
 
+    stop_car_and_close_serial();
     return 0;
 }

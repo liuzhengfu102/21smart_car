@@ -199,6 +199,10 @@ git diff --no-index -- .\car.cpp .\car.cpp.board
 
 板卡 IP、磁盘使用率、摄像头和串口设备均可能变化，连接或运行失败时应现场确认。
 
+2026-06-16 已验证：`root@192.168.3.57` 可免密 SSH 连接，主机名为 `orangepi5`。
+
+板卡工程目录内存在 `.git`，但 2026-06-16 检查时该仓库为 `No commits yet on main`，工程文件均处于未跟踪状态；版本记录仍以本地 Git 仓库为准。
+
 ### 6.1 关键依赖
 
 | 依赖 | 版本或路径 | 用途 |
@@ -377,6 +381,16 @@ ssh root@192.168.3.57 "lsusb"
 ssh root@192.168.3.57 \
   'cd /home/orangepi/Desktop/smartcar/build && cmake .. && make -j$(nproc)'
 ```
+
+若只需验证单个 `car.cpp` 改动且不覆盖板卡工程，可先传到 `/tmp` 并用板卡本机工具链编译：
+
+```bash
+scp car.cpp root@192.168.3.57:/tmp/car_refactor.cpp
+ssh root@192.168.3.57 \
+  'g++ -std=c++11 -Wall -Wextra /tmp/car_refactor.cpp -o /tmp/car_refactor_test $(pkg-config --cflags --libs opencv4) -lrt'
+```
+
+2026-06-16 已验证上述临时编译命令可用。
 
 ### 11.3 文件部署
 
