@@ -85,7 +85,7 @@
 Get-FileHash .\car.cpp -Algorithm MD5
 
 # Orange Pi 板卡
-ssh root@10.132.251.207 "md5sum /home/orangepi/Desktop/smartcar/car.cpp"
+ssh root@192.168.3.57 "md5sum /home/orangepi/Desktop/smartcar/car.cpp"
 ```
 
 处理原则：
@@ -98,7 +98,7 @@ ssh root@10.132.251.207 "md5sum /home/orangepi/Desktop/smartcar/car.cpp"
 安全拉取示例：
 
 ```powershell
-scp root@10.132.251.207:/home/orangepi/Desktop/smartcar/car.cpp .\car.cpp.board
+scp root@192.168.3.57:/home/orangepi/Desktop/smartcar/car.cpp .\car.cpp.board
 git diff --no-index -- .\car.cpp .\car.cpp.board
 ```
 
@@ -189,7 +189,7 @@ git diff --no-index -- .\car.cpp .\car.cpp.board
 | 架构 | `aarch64` / ARM64 |
 | 内存 | 约 8 GB |
 | 存储 | 约 29 GB SD 卡，曾记录使用率约 65% |
-| SSH 地址 | `root@10.132.251.207` |
+| SSH 地址 | `root@192.168.3.57` |
 | SSH 认证 | 本机公钥已加入板卡 `~/.ssh/authorized_keys` |
 | g++ / gcc | 11.4.0 |
 | CMake | 3.22.1 |
@@ -199,7 +199,7 @@ git diff --no-index -- .\car.cpp .\car.cpp.board
 
 板卡 IP、磁盘使用率、摄像头和串口设备均可能变化，连接或运行失败时应现场确认。
 
-2026-06-16 已验证：`root@10.132.251.207` 可免密 SSH 连接，主机名为 `orangepi5`。
+2026-06-16 已验证：`root@192.168.3.57` 可免密 SSH 连接，主机名为 `orangepi5`。
 
 板卡工程目录内存在 `.git`，但 2026-06-16 检查时该仓库为 `No commits yet on main`，工程文件均处于未跟踪状态；版本记录仍以本地 Git 仓库为准。
 
@@ -372,10 +372,10 @@ repeat obj_num times:
 ### 11.1 板卡只读检查
 
 ```bash
-ssh root@10.132.251.207 "uname -a"
-ssh root@10.132.251.207 "df -h /"
-ssh root@10.132.251.207 "ls -l /dev/ttyS3"
-ssh root@10.132.251.207 "lsusb"
+ssh root@192.168.3.57 "uname -a"
+ssh root@192.168.3.57 "df -h /"
+ssh root@192.168.3.57 "ls -l /dev/ttyS3"
+ssh root@192.168.3.57 "lsusb"
 ```
 
 ### 11.2 板卡编译
@@ -383,15 +383,15 @@ ssh root@10.132.251.207 "lsusb"
 获得刘征孚同意后执行：
 
 ```bash
-ssh root@10.132.251.207 \
+ssh root@192.168.3.57 \
   'cd /home/orangepi/Desktop/smartcar/build && cmake .. && make -j$(nproc)'
 ```
 
 若只需验证单个 `car.cpp` 改动且不覆盖板卡工程，可先传到 `/tmp` 并用板卡本机工具链编译：
 
 ```bash
-scp car.cpp root@10.132.251.207:/tmp/car_refactor.cpp
-ssh root@10.132.251.207 \
+scp car.cpp root@192.168.3.57:/tmp/car_refactor.cpp
+ssh root@192.168.3.57 \
   'g++ -std=c++11 -Wall -Wextra /tmp/car_refactor.cpp -o /tmp/car_refactor_test $(pkg-config --cflags --libs opencv4) -lrt'
 ```
 
@@ -403,7 +403,7 @@ ssh root@10.132.251.207 \
 
 ```bash
 scp car.cpp CMakeLists.txt \
-  root@10.132.251.207:/home/orangepi/Desktop/smartcar/
+  root@192.168.3.57:/home/orangepi/Desktop/smartcar/
 ```
 
 推荐按以下顺序部署：
