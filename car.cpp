@@ -23,10 +23,11 @@
 constexpr int IMAGE_CENTER_X = 320;
 constexpr int OBSTACLE_AREA_THRESHOLD = 3000;     // 【调参点】障碍车面积阈值
 constexpr int COIN_AREA_THRESHOLD = 1000;         // 【调参点】金币面积阈值
-constexpr int OBSTACLE_STEERING_OFFSET = 160;     // 障碍物避障偏移量
+constexpr int OBSTACLE_BASE_OFFSET = 180;         // 【调参点】障碍物基础避障偏移量
+constexpr int OBSTACLE_MAX_OFFSET = 280;          // 【调参点】障碍物最大避障偏移量
 constexpr float COIN_SMOOTH_ALPHA = 0.15f;        // 【调参点】金币追踪平滑系数
 constexpr float OUTPUT_SMOOTH_ALPHA = 0.45f;      // 【调参点】最终输出平滑系数，越大响应越快
-constexpr float CAR_PERSIST_TIME = 0.5f;          // 障碍物消失后保持避障时间(秒)
+constexpr float CAR_PERSIST_TIME = 0.6f;          // 障碍物消失后保持避障时间(秒)
 constexpr int ROAD_Y_MIN = 350;                   // 中线有效区间
 constexpr int ROAD_Y_MAX = 480;
 constexpr int ROAD_NEAR_Y = 470;                  // 近端预瞄位置，代表车前近处中线
@@ -74,6 +75,10 @@ bool is_obstacle(const DetectObj& obj) {
 
 int clamp_steering_x(int x) {
     return std::max(STEERING_MIN_X, std::min(STEERING_MAX_X, x));
+}
+
+float clamp_float(float value, float min_value, float max_value) {
+    return std::max(min_value, std::min(max_value, value));
 }
 
 // ========================== SerialPort 类 =======================
@@ -456,15 +461,34 @@ private:
 
     void compute_obstacle_steering(const DetectObj& obj) {
         int obj_center_x = object_center_x(obj);
+        int offset = compute_obstacle_offset(obj);
         if (obj_center_x < IMAGE_CENTER_X) {
-            image_median_x_ -= OBSTACLE_STEERING_OFFSET;
+            image_median_x_ += offset;
             print_action_str_ = "识别到障碍(人或车)在左，正在向右规避";
         } else {
-            image_median_x_ += OBSTACLE_STEERING_OFFSET;
+            image_median_x_ -= offset;
             print_action_str_ = "识别到障碍(人或车)在右，正在向左规避";
         }
+        image_median_x_ = clamp_steering_x(image_median_x_);
         last_car_tick_ = cv::getTickCount();
         last_car_target_x_ = image_median_x_;
+    }
+
+    int compute_obstacle_offset(const DetectObj& obj) {
+        int obj_center_x = object_center_x(obj);
+        int obj_max_y = std::max(obj.y1, obj.y2);
+        float proximity = static_cast<float>(obj_max_y - OBJ_Y_MIN)
+                        / static_cast<float>(OBJ_Y_MAX - OBJ_Y_MIN);
+        proximity = clamp_float(proximity, 0.0f, 1.0f);
+
+        float center_distance = static_cast<float>(std::abs(obj_center_x - IMAGE_CENTER_X))
+                              / static_cast<float>(IMAGE_CENTER_X);
+        float center_pressure = 1.0f - clamp_float(center_distance, 0.0f, 1.0f);
+
+        float strength = 0.6f * proximity + 0.4f * center_pressure;
+        int dynamic_offset = OBSTACLE_BASE_OFFSET
+                           + static_cast<int>((OBSTACLE_MAX_OFFSET - OBSTACLE_BASE_OFFSET) * strength);
+        return std::max(OBSTACLE_BASE_OFFSET, std::min(OBSTACLE_MAX_OFFSET, dynamic_offset));
     }
 
     void compute_coin_steering(const DetectObj& obj) {
